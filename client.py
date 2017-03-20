@@ -37,7 +37,7 @@ def handle_download(client_socket, tokens, chunk):
             chunk = client_socket.recv(MAX_LENGTH)
             if not chunk:
                 break
-            print "received :", len(chunk)
+            # print "received :", len(chunk)
             f.write(chunk)
     f.close()
 
