@@ -3,6 +3,7 @@ import os
 import sys
 import datetime
 import hashlib
+import json
 
 # get command line args
 try:
@@ -31,6 +32,17 @@ DOWNLOAD_INDICATOR = "DownLoadThisFile"
 
 # Functions
 # -----------------------------------------------
+
+def send_string(client_socket, ret):
+    data = json.dumps(ret)
+    total_len = len(data)
+    sent_len = 0
+    while sent_len < total_len:
+        sent = client_socket.send(data[sent_len:])
+        if sent == 0:
+            raise RuntimeError("socket connection broken")
+        sent_len += sent
+
 
 def md5(fname):
     hash_md5 = hashlib.md5()
@@ -65,22 +77,18 @@ def get_dt(time_string):
 
 
 # a function to handle index command
-def command_index(tokens):
+def command_index(client_socket, tokens):
     file_list = os.listdir(".")
-    ret = "\n"
-    if not len(file_list):
-        return ret
-    ret = "name\tsize\ttimestamp\n"
+    ret = []
 
     # index longlist
     if len(tokens)==1 or tokens[1] == "longlist":
         for file in file_list:
-            ret += "%s\t%s\t%s\n" % (
-                    file,
-                    str(os.path.getsize(file)),
-                    datetime.datetime.fromtimestamp(os.path.getmtime(file)).strftime('%Y-%m-%d %H:%M:%S')
-                )
-        return ret
+            ret.append({
+                "name" : file,
+                "size" : os.path.getsize(file),
+                "timestamp" : datetime.datetime.fromtimestamp(os.path.getmtime(file)).strftime('%Y-%m-%d %H:%M:%S')
+            })
 
     # index shortlist
     elif tokens[1] == "shortlist":
@@ -100,97 +108,130 @@ def command_index(tokens):
         for file in file_list:
             mtime = datetime.datetime.fromtimestamp(os.path.getmtime(file))
             if mtime >= sti and mtime <= eni:
-                ret += "%s %s %s\n" % (
-                        file,
-                        str(os.path.getsize(file)),
-                        mtime.strftime('%Y-%m-%d %H:%M:%S')
-                    )
-        return ret
+                ret.append({
+                    "name" : file,
+                    "size" : os.path.getsize(file),
+                    "timestamp" : mtime.strftime('%Y-%m-%d %H:%M:%S')
+                })
 
     # index invalid flag
     else:
-        return "\nInvalid args in index\n"
+        ret.append({
+            "error" : "index : invalid flag"
+        })
+
+    send_string(client_socket, ret)
+    return
 
 
 # a function to handle hash command
-def command_hash(tokens):
-    ret = "\n"
+def command_hash(client_socket, tokens):
+    ret = []
+
     if len(tokens) < 2:
-        return "\nProvide args\n"
+        ret.append({
+            "error" : "hash : argument not given"
+        })
 
     # verify
     elif tokens[1] == "verify":
         if len(tokens) < 3:
-            return "\nGive filename\n"
-        file = tokens[2]
-        if not os.path.isfile(file):
-            return "\nFile doesn't exist : %s\n" % file
-        ret += "%s\n%s\n%s\n" % (
-                file,
-                md5(file),
-                datetime.datetime.fromtimestamp(os.path.getmtime(file)).strftime('%Y-%m-%d %H:%M:%S')
-            )
-        return ret
+            ret.append({
+                "error" : "hash verify : filename not given"
+            })
+        else:
+            file = tokens[2]
+            if not os.path.isfile(file):
+                ret.append({
+                    "error" : "hash verify : file doesn't exist"
+                })
+            else:
+                ret.append({
+                    "name" : file,
+                    "md5" : md5(file),
+                    "timestamp" : datetime.datetime.fromtimestamp(os.path.getmtime(file)).strftime('%Y-%m-%d %H:%M:%S')
+                })
+
 
     # checkall
     elif tokens[1] == "checkall":
         file_list = os.listdir(".")
         for file in file_list:
             if os.path.isfile(file):
-                ret += "%s\n%s\n%s\n\n" % (
-                        file,
-                        md5(file),
-                        datetime.datetime.fromtimestamp(os.path.getmtime(file)).strftime('%Y-%m-%d %H:%M:%S')
-                    )
-        return ret
+                ret.append({
+                    "name" : file,
+                    "md5" : md5(file),
+                    "timestamp" : datetime.datetime.fromtimestamp(os.path.getmtime(file)).strftime('%Y-%m-%d %H:%M:%S')
+                })
 
     # hash invalid args
     else:
-        return "\nInvalid args in hash\n"
+        ret.append({
+            "error" : "hash : invalid argument"
+        })
+
+    send_string(client_socket, ret)
+    return
+
+
 
 # a function to handle download
-def command_download(tokens, client_socket):
-    ret = "\n"
+def command_download(client_socket, tokens):
+    ret = []
     if len(tokens) < 2:
-        return "\nProvide args\n"
+        ret.append({
+            "error" : "download : argument not given"
+        })
+
+    # send file via TCP
     elif tokens[1] == "TCP":
+
         if len(tokens) < 3:
-            return "\nGive filename\n"
-        file = tokens[2]
-        if not os.path.isfile(file):
-            return "\nFile doesn't exist : %s\n" % file
+            ret.append({
+                "error" : "download : filename not given"
+            })
+        else:
+            file = tokens[2]
+            if not os.path.isfile(file):
+                ret.append({
+                    "error" : "download : file doesn't exist"
+                })
+            else:
+                f = open(file, 'rb')
+                client_socket.send(DOWNLOAD_INDICATOR)
 
-        f = open(file, 'rb')
-        client_socket.send(DOWNLOAD_INDICATOR)
+                chunk = f.read(MAX_LENGTH)
+                while chunk:
+                    client_socket.send(chunk)
+                    # print "sent :", len(chunk)
+                    chunk = f.read(MAX_LENGTH)
+                f.close()
+                return
 
-        chunk = f.read(MAX_LENGTH)
-        while chunk:
-            client_socket.send(chunk)
-            # print "sent :", len(chunk)
-            chunk = f.read(MAX_LENGTH)
-        f.close()
-        return ""
+    # download invalid argument
     else:
-        return "\nInvalid args in download\n"
+        ret.append({
+            "error" : "download : invalid argument"
+        })
+    send_string(client_socket, ret)
+    return
 
 
-def process(client_socket, command):
+def process(client_socket, client_input):
 
     # split into tokens
-    tokens = command.split()
-    ret = "\n"
-    print tokens
+    tokens = json.loads(client_input)
 
     if not len(tokens):
-        return ret
+        client_socket.send("Give command")
     elif tokens[0] == "index":
-        return command_index(tokens)
+        command_index(client_socket, tokens)
     elif tokens[0] == "hash":
-        return command_hash(tokens)
+        command_hash(client_socket, tokens)
     elif tokens[0] == "download":
-        return command_download(tokens, client_socket)
+        command_download(client_socket, tokens)
     else:
-        return "Invalid command\n"
+        client_socket.send("Invalid Input")
 
 
 # create server socket and bind
@@ -218,13 +259,9 @@ try:
 
         # process data
         try:
-            client_output = process(client_socket, client_input)
+            process(client_socket, client_input)
         except Exception as e:
             print str(e)
-            client_output = "Error occurred\n"
-
-        # send data
-        client_socket.send(client_output)
 
         # close connection
         client_socket.close()

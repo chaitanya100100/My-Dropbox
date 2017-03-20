@@ -1,6 +1,7 @@
 import socket
 import os
 import sys
+import json
 
 # get command line args
 try:
@@ -25,21 +26,32 @@ MAX_LENGTH = 1024
 PROMPT_HEADER = ">>"
 DOWNLOAD_INDICATOR = "DownLoadThisFile"
 
+
 # functions
 
 def handle_download(client_socket, tokens, chunk):
     chunk = chunk.replace(DOWNLOAD_INDICATOR, "")
     file = tokens[2]
-    print chunk
+
     with open(file, 'wb') as f:
         f.write(chunk)
         while True:
             chunk = client_socket.recv(MAX_LENGTH)
             if not chunk:
                 break
-            # print "received :", len(chunk)
             f.write(chunk)
     f.close()
+
+
+def handle_output(client_socket, data):
+    while True:
+        chunk = client_socket.recv(MAX_LENGTH)
+        if not chunk:
+            break
+        data += chunk
+    print data
+
+
 
 def process(command):
 
@@ -51,21 +63,23 @@ def process(command):
     client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     client_socket.connect((his_host, his_port))
 
-    # send command to server
-    client_socket.send(command)
+    # send command to server and get response
+    client_socket.send(json.dumps(tokens))
     data = client_socket.recv(MAX_LENGTH)
 
+    # handle response
     if data.startswith(DOWNLOAD_INDICATOR):
         handle_download(client_socket, tokens, data)
     else:
-        print data
+        handle_output(client_socket, data)
 
-
+    # close socket
     client_socket.close()
     return
 
 
 print "current directory :", os.getcwd()
+
 # terminal loop
 while True:
 
