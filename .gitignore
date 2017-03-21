@@ -1,2 +1,6 @@
 with_thread/1/box/*
 with_thread/2/box/*
+before_thread/1/box/*
+before_thread/2/box/*
+with_sync/1/box/*
+with_sync/2/box/*
