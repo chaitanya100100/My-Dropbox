@@ -1,3 +1,5 @@
+import glob
+import mimetypes
 import threading
 import socket
 import os
@@ -30,7 +32,9 @@ class ServerThread(threading.Thread):
     def __init__(self):
         threading.Thread.__init__(self)
         self.MAX_LENGTH = 1024
-        self.DOWNLOAD_INDICATOR = "#!#DownLoadThisFile#!#"
+        self.MAX_LENGTH_UDP = 32*1024
+        self.DOWNLOAD_TCP = "#!#TCP#!#"
+        self.DOWNLOAD_UDP = "#!#UDP#!#"
 
     def run(self):
         self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -135,24 +139,30 @@ class ServerThread(threading.Thread):
 
     # a function to handle index command
     def command_index(self, tokens):
-        file_list = os.listdir(".")
         ret = []
 
         # index longlist
         if len(tokens)==1 or tokens[1] == "longlist":
+            file_list = os.listdir(".")
             for file in file_list:
+
+                get_file_access(file)
 
                 mtime = os.path.getmtime(file)
                 ret.append({
                     "name" : file,
                     "size" : os.path.getsize(file),
                     "timestamp" : datetime.datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M:%S'),
-                    "realtime" : mtime
+                    "realtime" : mtime,
+                    "type" : mimetypes.guess_type(file)
                 })
+
+                leave_file_access(file)
 
         # index shortlist
         elif tokens[1] == "shortlist":
 
+            file_list = os.listdir(".")
             if len(tokens) == 2:
                 sti = datetime.datetime.now() - datetime.timedelta(days=1)
                 eni = datetime.datetime.now()
@@ -166,6 +176,8 @@ class ServerThread(threading.Thread):
                 eni = self.get_dt(tokens[3])
 
             for file in file_list:
+
+                get_file_access(file)
                 mtime = os.path.getmtime(file)
                 dtobj = datetime.datetime.fromtimestamp(mtime)
                 if dtobj >= sti and dtobj <= eni:
@@ -173,8 +185,33 @@ class ServerThread(threading.Thread):
                         "name" : file,
                         "size" : os.path.getsize(file),
                         "timestamp" : dtobj.strftime('%Y-%m-%d %H:%M:%S'),
-                        "realtime" : mtime
+                        "realtime" : mtime,
+                        "type" : mimetypes.guess_type(file)
                     })
+                leave_file_access(file)
+
+        # index regex
+        elif tokens[1] == "regex":
+            if len(tokens) < 3:
+                ret.append({
+                    "error" : "index regex : regex not given"
+                })
+            else:
+                file_list = glob.glob(tokens[2])
+                for file in file_list:
+                    get_file_access(file)
+
+                    mtime = os.path.getmtime(file)
+                    ret.append({
+                        "name" : file,
+                        "size" : os.path.getsize(file),
+                        "timestamp" : datetime.datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M:%S'),
+                        "realtime" : mtime,
+                        "type" : mimetypes.guess_type(file)
+                    })
+
+                    leave_file_access(file)
+
 
         # index invalid flag
         else:
@@ -202,6 +239,7 @@ class ServerThread(threading.Thread):
                 })
             else:
                 file = tokens[2]
+                get_file_access(file)
                 if not os.path.isfile(file):
                     ret.append({
                         "error" : "hash verify : file doesn't exist"
@@ -212,22 +250,26 @@ class ServerThread(threading.Thread):
                         "name" : file,
                         "hash_md5" : self.md5(file),
                         "timestamp" : datetime.datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M:%S'),
-                        "realtime" : mtime
+                        "realtime" : mtime,
+                        "type" : mimetypes.guess_type(file)
                     })
-
+                leave_file_access(file)
 
         # checkall
         elif tokens[1] == "checkall":
             file_list = os.listdir(".")
             for file in file_list:
                 if os.path.isfile(file):
+                    get_file_access(file)
                     mtime = os.path.getmtime(file)
                     ret.append({
                         "name" : file,
                         "hash_md5" : self.md5(file),
                         "timestamp" : datetime.datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M:%S'),
-                        "realtime" : mtime
+                        "realtime" : mtime,
+                        "type" : mimetypes.guess_type(file)
                     })
+                    leave_file_access(file)
 
         # hash invalid args
         else:
@@ -253,17 +295,19 @@ class ServerThread(threading.Thread):
 
             if len(tokens) < 3:
                 ret.append({
-                    "error" : "download : filename not given"
+                    "error" : "download TCP : filename not given"
                 })
             else:
                 file = tokens[2]
+                get_file_access(file)
                 if not os.path.isfile(file):
                     ret.append({
-                        "error" : "download : file doesn't exist"
+                        "error" : "download TCP : file doesn't exist"
                     })
+                    leave_file_access(file)
                 else:
                     f = open(file, 'rb')
-                    self.client_socket.send(self.DOWNLOAD_INDICATOR)
+                    self.client_socket.send(self.DOWNLOAD_TCP)
 
                     chunk = f.read(self.MAX_LENGTH)
                     while chunk:
@@ -271,6 +315,35 @@ class ServerThread(threading.Thread):
                         # print "sent :", len(chunk)
                         chunk = f.read(self.MAX_LENGTH)
                     f.close()
+                    leave_file_access(file)
+                    return
+
+        # send file via UDP
+        elif tokens[1] == "UDP":
+            if len(tokens) < 4:
+                ret.append({
+                    "error" : "download UDP : filename not given"
+                })
+            else:
+                file = tokens[2]
+                get_file_access(file)
+                if not os.path.isfile(file):
+                    ret.append({
+                        "error" : "download UDP : file doesn't exist"
+                    })
+                    leave_file_access(file)
+                else:
+                    self.client_socket.send(self.DOWNLOAD_UDP + self.md5(file))
+                    self.client_socket.close()
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                    f = open(file, 'rb')
+                    chunk = f.read(self.MAX_LENGTH_UDP)
+                    while chunk:
+                        sock.sendto(chunk, (his_host, int(tokens[3])))
+                        chunk = f.read(self.MAX_LENGTH_UDP)
+                    f.close()
+                    sock.close()
+                    leave_file_access(file)
                     return
 
         # download invalid argument
@@ -290,7 +363,9 @@ class ClientThread(threading.Thread):
     def __init__(self):
         threading.Thread.__init__(self)
         self.PROMPT_HEADER = ">>"
-        self.DOWNLOAD_INDICATOR = "#!#DownLoadThisFile#!#"
+        self.DOWNLOAD_TCP = "#!#TCP#!#"
+        self.DOWNLOAD_UDP = "#!#UDP#!#"
+        self.MAX_LENGTH_UDP = 32*1024
         self.MAX_LENGTH = 1024
 
     def run(self):
@@ -311,13 +386,12 @@ class ClientThread(threading.Thread):
                 continue
 
             # process command
-            if command == "exit":
+            if command.strip() == "exit":
                 return
-            elif command == "sync":
+            elif command.strip() == "sync":
                 self.sync()
             else:
-                ans = self.process(command)
-                print ans
+                self.process(command)
 
 
     def process(self, command):
@@ -325,6 +399,50 @@ class ClientThread(threading.Thread):
         tokens = command.split()
         if not len(tokens):
             return
+
+        if tokens[0] == "download":
+            if len(tokens) != 1:
+                if tokens[1] == "TCP":
+                    self.receive_file_tcp(tokens)
+                elif tokens[1] == "UDP":
+                    count = 1
+                    fair = self.receive_file_udp(tokens)
+                    while not fair and count < 4:
+                        fair = self.receive_file_udp(tokens)
+                        count += 1
+                    if not fair:
+                        print "UDP can't handle this"
+                else:
+                    print "download : invalid argument"
+            else:
+                print "download : argument not given"
+
+        else:
+            self.receive_string(tokens)
+
+
+
+    def receive_string(self, tokens):
+
+        # create client socket and connect
+        self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.client_socket.connect((his_host, his_port))
+
+        # send command to server and get response
+        self.client_socket.send(json.dumps(tokens))
+        data = ""
+        while True:
+            chunk = self.client_socket.recv(self.MAX_LENGTH)
+            if not chunk:
+                break
+            data += chunk
+
+        # close socket
+        self.client_socket.close()
+        print data
+
+
+    def receive_file_tcp(self, tokens):
 
         # create client socket and connect
         self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -334,29 +452,78 @@ class ClientThread(threading.Thread):
         self.client_socket.send(json.dumps(tokens))
         data = self.client_socket.recv(self.MAX_LENGTH)
 
-        # handle response
-        if data.startswith(self.DOWNLOAD_INDICATOR):
-            ans = self.receive_file(tokens, data)
+        if data.startswith(self.DOWNLOAD_TCP):
+            file = tokens[2]
+            chunk = data.replace(self.DOWNLOAD_TCP, "")
+            get_file_access(file)
+            with open(file, 'wb') as f:
+                f.write(chunk)
+                while True:
+                    chunk = self.client_socket.recv(self.MAX_LENGTH)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+            f.close()
+            leave_file_access(file)
         else:
-            ans = self.receive_string(data)
-
+            print data
         # close socket
         self.client_socket.close()
-        return ans
 
 
+    def receive_file_udp(self, tokens):
 
-    def receive_string(self, data):
-        while True:
-            chunk = self.client_socket.recv(self.MAX_LENGTH)
-            if not chunk:
-                break
-            data += chunk
-        return data
+        # create client socket and connect
+        self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.client_socket.connect((his_host, his_port))
+
+        # create udp socket
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.bind((my_host, 0))
+
+        if len(tokens) < 4:
+            tokens.append(sock.getsockname()[1])
+        else:
+            tokens[3] = sock.getsockname()[1]
+
+        # send command to server and get response
+        self.client_socket.send(json.dumps(tokens))
+        data = self.client_socket.recv(self.MAX_LENGTH)
+        self.client_socket.close()
+
+        if data.startswith(self.DOWNLOAD_UDP):
+            file = tokens[2]
+            bla, real_hash_md5 = data.split(self.DOWNLOAD_UDP)
+
+            get_file_access(file)
+            with open(file, 'wb') as f:
+                try:
+                    while True:
+                        chunk, bla = sock.recvfrom(self.MAX_LENGTH_UDP)
+                        if not chunk:
+                            break
+                        sock.settimeout(2)
+                        f.write(chunk)
+                except socket.timeout:
+                    pass
+
+            f.close()
+            sock.close()
+            hash_md5 = self.md5(file)
+            leave_file_access(file)
+            if hash_md5 != real_hash_md5:
+                return False
+            else:
+                return True
+
+        else:
+            sock.close()
+            print data
+            return True
 
 
     def receive_file(self, tokens, data):
-        chunk = data.replace(self.DOWNLOAD_INDICATOR, "")
+        chunk = data.replace(self.DOWNLOAD_TCP, "")
         file = tokens[2]
 
         with open(file, 'wb') as f:
@@ -384,30 +551,59 @@ class ClientThread(threading.Thread):
         for file in files_data:
             file_name = file["name"]
             if not os.path.exists(file_name):
+                get_file_access(file_name)
                 self.process("download TCP %s" % file_name)
+                leave_file_access(file_name)
             else:
+                get_file_access(file_name)
                 hash_here = self.md5(file_name)
-                if file.hash_md5 != hash_here:
+                realtime_here = os.path.getmtime(file_name)
+                if file["hash_md5"] != hash_here:
                     self.process("download TCP %s" % file_name)
-                    realtime_here = os.path.getmtime(file_name)
                     if realtime_here < file.realtime:
                         self.process("download TCP %s" % file_name)
                     else:
                         pass
                 else:
                     pass
+                leave_file_access(file_name)
 
 
-
+# create server and client
 server_thread = ServerThread()
 client_thread = ClientThread()
 
+# locks
+locks = {}
+
+def get_file_access(file):
+    if file in locks:
+        lock = locks[file]
+    else:
+        lock = threading.Lock()
+        locks[file] = lock
+    lock.acquire()
+
+def leave_file_access(file):
+    if file in locks:
+        lock = locks[file]
+        lock.release()
+    else:
+        print "Lock problem"
+        sys.exit()
+
+
+# if current thread is at end and server is still running then server will be terminated
+# this is to ensure that when client exits or gets some error, then entire proccess (including server thread) should be terminated
 server_thread.daemon = True
 
+
+# start server and client
 server_thread.start()
 client_thread.start()
 
 
+# wait for client to exit
 client_thread.join()
 #server_thread.join()
 
