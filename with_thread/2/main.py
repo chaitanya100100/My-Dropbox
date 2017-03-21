@@ -30,6 +30,7 @@ class ServerThread(threading.Thread):
     def __init__(self):
         threading.Thread.__init__(self)
         self.MAX_LENGTH = 1024
+        self.DOWNLOAD_INDICATOR = "#!#DownLoadThisFile#!#"
 
     def run(self):
         self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -53,11 +54,11 @@ class ServerThread(threading.Thread):
                 print "get connection from", self.client_addr
 
                 # get data
-                self.client_input = self.client_socket.recv(self.MAX_LENGTH)
+                client_input = self.client_socket.recv(self.MAX_LENGTH)
 
                 # process data
                 try:
-                    self.process()
+                    self.process(client_input)
                 except Exception as e:
                     print str(e)
 
@@ -73,9 +74,6 @@ class ServerThread(threading.Thread):
         print "server closing from", my_host, my_port
         self.server_socket.close()
 
-
-    def process(self):
-        self.client_socket.send("I got this : %s\n"%self.client_input)
 
     def send_string(self, ret):
         data = json.dumps(ret)
@@ -119,6 +117,173 @@ class ServerThread(threading.Thread):
             return datetime.datetime(l[0], l[1], l[2], l[3], l[4], l[5])
 
 
+    def process(self, client_input):
+
+        # split into tokens
+        tokens = json.loads(client_input)
+
+        if not len(tokens):
+            self.client_socket.send("Give command")
+        elif tokens[0] == "index":
+            self.command_index(tokens)
+        elif tokens[0] == "hash":
+            self.command_hash(tokens)
+        elif tokens[0] == "download":
+            self.command_download(tokens)
+        else:
+            self.client_socket.send("Invalid Input")
+
+    # a function to handle index command
+    def command_index(self, tokens):
+        file_list = os.listdir(".")
+        ret = []
+
+        # index longlist
+        if len(tokens)==1 or tokens[1] == "longlist":
+            for file in file_list:
+
+                mtime = os.path.getmtime(file)
+                ret.append({
+                    "name" : file,
+                    "size" : os.path.getsize(file),
+                    "timestamp" : datetime.datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M:%S'),
+                    "realtime" : mtime
+                })
+
+        # index shortlist
+        elif tokens[1] == "shortlist":
+
+            if len(tokens) == 2:
+                sti = datetime.datetime.now() - datetime.timedelta(days=1)
+                eni = datetime.datetime.now()
+
+            elif len(tokens) == 3:
+                sti = self.get_dt(tokens[2])
+                eni = datetime.datetime.now()
+
+            else:
+                sti = self.get_dt(tokens[2])
+                eni = self.get_dt(tokens[3])
+
+            for file in file_list:
+                mtime = os.path.getmtime(file)
+                dtobj = datetime.datetime.fromtimestamp(mtime)
+                if dtobj >= sti and dtobj <= eni:
+                    ret.append({
+                        "name" : file,
+                        "size" : os.path.getsize(file),
+                        "timestamp" : dtobj.strftime('%Y-%m-%d %H:%M:%S'),
+                        "realtime" : mtime
+                    })
+
+        # index invalid flag
+        else:
+            ret.append({
+                "error" : "index : invalid flag"
+            })
+
+        self.send_string(ret)
+        return
+
+    # a function to handle hash command
+    def command_hash(self, tokens):
+        ret = []
+
+        if len(tokens) < 2:
+            ret.append({
+                "error" : "hash : argument not given"
+            })
+
+        # verify
+        elif tokens[1] == "verify":
+            if len(tokens) < 3:
+                ret.append({
+                    "error" : "hash verify : filename not given"
+                })
+            else:
+                file = tokens[2]
+                if not os.path.isfile(file):
+                    ret.append({
+                        "error" : "hash verify : file doesn't exist"
+                    })
+                else:
+                    mtime = os.path.getmtime(file)
+                    ret.append({
+                        "name" : file,
+                        "hash_md5" : self.md5(file),
+                        "timestamp" : datetime.datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M:%S'),
+                        "realtime" : mtime
+                    })
+
+
+        # checkall
+        elif tokens[1] == "checkall":
+            file_list = os.listdir(".")
+            for file in file_list:
+                if os.path.isfile(file):
+                    mtime = os.path.getmtime(file)
+                    ret.append({
+                        "name" : file,
+                        "hash_md5" : self.md5(file),
+                        "timestamp" : datetime.datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M:%S'),
+                        "realtime" : mtime
+                    })
+
+        # hash invalid args
+        else:
+            ret.append({
+                "error" : "hash : invalid argument"
+            })
+
+        self.send_string(ret)
+        return
+
+
+
+    # a function to handle download
+    def command_download(self, tokens):
+        ret = []
+        if len(tokens) < 2:
+            ret.append({
+                "error" : "download : argument not given"
+            })
+
+        # send file via TCP
+        elif tokens[1] == "TCP":
+
+            if len(tokens) < 3:
+                ret.append({
+                    "error" : "download : filename not given"
+                })
+            else:
+                file = tokens[2]
+                if not os.path.isfile(file):
+                    ret.append({
+                        "error" : "download : file doesn't exist"
+                    })
+                else:
+                    f = open(file, 'rb')
+                    self.client_socket.send(self.DOWNLOAD_INDICATOR)
+
+                    chunk = f.read(self.MAX_LENGTH)
+                    while chunk:
+                        self.client_socket.send(chunk)
+                        # print "sent :", len(chunk)
+                        chunk = f.read(self.MAX_LENGTH)
+                    f.close()
+                    return
+
+        # download invalid argument
+        else:
+            ret.append({
+                "error" : "download : invalid argument"
+            })
+        self.send_string(ret)
+        return
+
+
+
+
 
 class ClientThread(threading.Thread):
 
@@ -146,7 +311,13 @@ class ClientThread(threading.Thread):
                 continue
 
             # process command
-            self.process(command)
+            if command == "exit":
+                return
+            elif command == "sync":
+                self.sync()
+            else:
+                ans = self.process(command)
+                print ans
 
 
     def process(self, command):
@@ -165,25 +336,26 @@ class ClientThread(threading.Thread):
 
         # handle response
         if data.startswith(self.DOWNLOAD_INDICATOR):
-            self.handle_download(tokens, data)
+            ans = self.receive_file(tokens, data)
         else:
-            self.handle_output(data)
+            ans = self.receive_string(data)
 
         # close socket
         self.client_socket.close()
-        return
+        return ans
 
 
-    def handle_output(self, data):
+
+    def receive_string(self, data):
         while True:
             chunk = self.client_socket.recv(self.MAX_LENGTH)
             if not chunk:
                 break
             data += chunk
-        print data
+        return data
 
 
-    def handle_download(self, tokens, data):
+    def receive_file(self, tokens, data):
         chunk = data.replace(self.DOWNLOAD_INDICATOR, "")
         file = tokens[2]
 
@@ -195,16 +367,48 @@ class ClientThread(threading.Thread):
                     break
                 f.write(chunk)
         f.close()
+        return ""
+
+    def md5(self, fname):
+        hash_md5 = hashlib.md5()
+        with open(fname, "rb") as f:
+            for chunk in iter(lambda: f.read(4096), b""):
+                hash_md5.update(chunk)
+        return hash_md5.hexdigest()
+
+
+    def sync(self):
+
+        files_data = json.loads(self.process("hash checkall"))
+
+        for file in files_data:
+            file_name = file["name"]
+            if not os.path.exists(file_name):
+                self.process("download TCP %s" % file_name)
+            else:
+                hash_here = self.md5(file_name)
+                if file.hash_md5 != hash_here:
+                    self.process("download TCP %s" % file_name)
+                    realtime_here = os.path.getmtime(file_name)
+                    if realtime_here < file.realtime:
+                        self.process("download TCP %s" % file_name)
+                    else:
+                        pass
+                else:
+                    pass
 
 
 
 server_thread = ServerThread()
 client_thread = ClientThread()
 
+server_thread.daemon = True
+
 server_thread.start()
 client_thread.start()
 
-server_thread.join()
+
 client_thread.join()
+#server_thread.join()
 
 print "Exiting Here"
