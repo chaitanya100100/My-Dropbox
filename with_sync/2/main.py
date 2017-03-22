@@ -9,7 +9,7 @@ import datetime
 import hashlib
 import json
 
-command_line = True
+command_line = False
 
 # get command line args
 try:
@@ -60,14 +60,14 @@ class ServerThread(threading.Thread):
                 except Exception as e:
                     print str(e)
                     break
-                #print "get connection from", self.client_addr
+                print "get connection from", self.client_addr
 
                 # get data
                 client_input = self.client_socket.recv(self.MAX_LENGTH)
                 if not client_input:
                     self.client_socket.close()
                     continue
-
+                print "got request %s" % client_input
                 # process data
                 try:
                     self.process(client_input)
@@ -380,6 +380,8 @@ class ClientThread(threading.Thread):
 
         print "current directory :", os.getcwd()
 
+        time.sleep(5)
+
         # terminal loop
         while True:
 
@@ -414,7 +416,7 @@ class ClientThread(threading.Thread):
             else:
                 self.process(command)
 
-            time.sleep(10)
+            time.sleep(15)
 
 
     def process(self, command):
