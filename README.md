@@ -36,3 +36,7 @@ A client-server pipeline implemented with python socket programming to serve bas
 - First part i.e. 1_before_thread, can run a client in one directory and a server in other directory. Initiating bash scripts for server and client are there.
 - Second and third part have both the sides technically similar so the same code should reside on both the sides. `main.py` has that code. `update.sh` is to copy the main code to both the boxes. Each box has Initiating bash scripts.
 - First and second part will show the server and client output on the prompt whereas third will run on the background.
+
+## Scope of improvement
+- Delete functionality : If a file is deleted from one side, other side should also delete it.
+- Proper log of the actions taken
